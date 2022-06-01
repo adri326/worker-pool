@@ -1,4 +1,4 @@
-#![feature(duration_consts_2)]
+#![feature(negative_impls)]
 
 use std::thread::{JoinHandle};
 use std::marker::PhantomData;
@@ -23,11 +23,10 @@ where
     Down: Clone + Send + 'static,
 {
     channel: (SyncSender<UpMsg<Up>>, Receiver<UpMsg<Up>>),
-    ready_channel: (Sender<()>, Receiver<()>),
     buffer_length: usize,
     buffer_prev: Option<UpMsg<Up>>,
 
-    workers: Vec<(JoinHandle<Option<Up>>, Sender<DownMsg<Down>>)>,
+    workers: Vec<(JoinHandle<()>, Sender<DownMsg<Down>>)>,
 
     phantoms: PhantomData<(Up, Down)>
 }
@@ -41,7 +40,6 @@ where
     pub fn new(buffer_length: usize) -> Self {
         Self {
             channel: sync_channel(buffer_length),
-            ready_channel: channel(),
             buffer_length,
             buffer_prev: None,
             workers: Vec::new(),
@@ -52,19 +50,14 @@ where
     #[inline]
     pub fn execute<F>(&mut self, callback: F)
     where
-        F: (FnOnce(WorkerSender<Up>, Receiver<DownMsg<Down>>) -> Option<Up>),
+        F: (FnOnce(WorkerSender<Up>, Receiver<DownMsg<Down>>)),
         F: Send + 'static
     {
         let (down_tx, down_rx) = channel();
         let up_tx = self.channel.0.clone();
-        let ready_tx = self.ready_channel.0.clone();
         self.workers.push((
             std::thread::spawn(move || {
-                let res = (callback)(WorkerSender::from(up_tx), down_rx);
-
-                // Will only fail if RecvAllIterator is dropped, in which case we don't care about the result
-                let _ = ready_tx.send(());
-                res
+                (callback)(WorkerSender::from(up_tx), down_rx);
             }),
             down_tx
         ));
@@ -73,7 +66,7 @@ where
     #[inline]
     pub fn execute_many<F>(&mut self, n_workers: usize, callback: F)
     where
-        F: (FnOnce(WorkerSender<Up>, Receiver<DownMsg<Down>>) -> Option<Up>),
+        F: (FnOnce(WorkerSender<Up>, Receiver<DownMsg<Down>>)),
         F: Clone + Send + 'static
     {
         for _n in 0..n_workers {
@@ -103,40 +96,66 @@ where
     /// messages from the workers. As soon as this function returns, the WorkerPool will be back to its starting state,
     /// allowing you to execute more tasks immediately
     pub fn stop(&mut self) -> RecvAllIterator<Up> {
-        let ready_channel = std::mem::replace(&mut self.ready_channel, channel());
         let channel = std::mem::replace(&mut self.channel, sync_channel(self.buffer_length));
         let buffer_prev = std::mem::replace(&mut self.buffer_prev, None);
         let workers_len = self.workers.len();
         let workers = std::mem::replace(&mut self.workers, Vec::with_capacity(workers_len));
 
-        let workers = workers.into_iter().map(|w| {
+        let workers = workers.into_iter().map(|worker| {
             // Note: the only instance where this can fail is if the receiver was dropped,
             // in which case we can only hope that the thread will eventually join
-            let _ = w.1.send(DownMsg::Stop);
-            w.0
+            let _ = worker.1.send(DownMsg::Stop);
+            worker.0
         }).collect::<Vec<_>>();
 
         RecvAllIterator::new(
             channel.1,
-            ready_channel.1,
             buffer_prev,
             workers
         )
     }
 
-    // fn recv(&mut self) -> Result<UpMsg<Up>, RecvError> {
-    //     if self.buffer_prev.is_some() {
-    //         Ok(std::mem::replace(&mut self.buffer_prev, None).unwrap())
-    //     } else {
-    //         self.channel.1.recv()
-    //     }
-    // }
+    /// Stops the execution of all threads and joins them. Returns a Vec containing all of the remaining yielded values.
+    /// Note that the returned Vec will ignore the `buffer_length` limitation.
+    #[inline]
+    pub fn stop_and_join(&mut self) -> Vec<Up> {
+        let (sender, receiver) = std::mem::replace(&mut self.channel, sync_channel(self.buffer_length));
+        std::mem::drop(sender); // Prevent deadlock
+        let buffer_prev = std::mem::replace(&mut self.buffer_prev, None);
+        let workers_len = self.workers.len();
+        let workers = std::mem::replace(&mut self.workers, Vec::with_capacity(workers_len));
 
-    // fn try_recv(&mut self) -> Result<UpMsg<Up>, TryRecvError> {
-    //     if self.buffer_prev.is_some() {
-    //         Ok(std::mem::replace(&mut self.buffer_prev, None).unwrap())
-    //     } else {
-    //         self.channel.1.try_recv()
-    //     }
-    // }
+        for worker in workers.iter() {
+            // Note: the only instance where this can fail is if the receiver was dropped,
+            // in which case we can only hope that the thread will eventually join
+            let _ = worker.1.send(DownMsg::Stop);
+        }
+
+        let mut res = Vec::new();
+
+        if let Some(buffer_prev) = buffer_prev {
+            res.push(buffer_prev.get());
+        }
+
+        while let Ok(msg) = receiver.recv() {
+            res.push(msg.get());
+        }
+
+        for worker in workers {
+            match worker.0.join() {
+                Ok(_) => {},
+                Err(e) => std::panic::resume_unwind(e),
+            }
+        }
+
+        res
+    }
+
+    pub fn broadcast(&self, msg: DownMsg<Down>) {
+        for (_join, tx) in self.workers.iter() {
+            // This will fail iff the thread has dropped its receiver, in which case we
+            // don't want for it to affect the other threads
+            let _ = tx.send(msg.clone());
+        }
+    }
 }

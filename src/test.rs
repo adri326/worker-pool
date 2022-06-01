@@ -7,7 +7,6 @@ fn test_execute() {
 
     pool.execute(|tx, _rx| {
         tx.send(1).unwrap();
-        None
     });
 
     std::thread::sleep(Duration::new(0, 100_000_000));
@@ -24,21 +23,18 @@ fn test_receive_burst() {
         tx.send(1).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(4).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(2).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(5).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(3).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(6).unwrap();
-        None
     });
 
     std::thread::sleep(Duration::new(0, 100_000_000));
@@ -56,21 +52,18 @@ fn test_receive_all() {
         tx.send(1).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(4).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(2).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(5).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(3).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(6).unwrap();
-        None
     });
 
     let mut results = pool.stop().collect::<Vec<_>>();
@@ -87,21 +80,18 @@ fn test_receive_all_bottleneck() {
         tx.send(1).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(4).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(2).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(5).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(3).unwrap();
         std::thread::sleep(Duration::new(0, 200_000_000));
         tx.send(6).unwrap();
-        None
     });
 
     let mut results = Vec::new();
@@ -122,21 +112,18 @@ fn test_receive_all_bottleneck2() {
         tx.send(1).unwrap();
         std::thread::sleep(Duration::new(0, 10_000_000));
         tx.send(4).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(2).unwrap();
         std::thread::sleep(Duration::new(0, 10_000_000));
         tx.send(5).unwrap();
-        None
     });
 
     pool.execute(|tx, _rx| {
         tx.send(3).unwrap();
         std::thread::sleep(Duration::new(0, 10_000_000));
         tx.send(6).unwrap();
-        None
     });
 
     let mut results = Vec::new();
@@ -146,4 +133,28 @@ fn test_receive_all_bottleneck2() {
     }
     results.sort();
     assert_eq!(results, vec![1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+#[should_panic]
+fn test_join_panic() {
+    let mut pool: WorkerPool<(), ()> = WorkerPool::new(1);
+
+    pool.execute(|_tx, _rx| {
+        panic!("Oh no I panicked");
+    });
+
+    pool.stop_and_join();
+}
+
+#[test]
+#[should_panic]
+fn test_stop_panic() {
+    let mut pool: WorkerPool<(), ()> = WorkerPool::new(1);
+
+    pool.execute(|_tx, _rx| {
+        panic!("Oh no I panicked");
+    });
+
+    let _ = pool.stop().collect::<Vec<_>>();
 }
