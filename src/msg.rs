@@ -9,7 +9,7 @@ pub type RecvError = std::sync::mpsc::RecvError;
 pub type SendError<T> = std::sync::mpsc::SendError<T>;
 pub type TrySendError<T> = std::sync::mpsc::TrySendError<T>;
 
-/// A message sent from the organizer to the workers
+/// A message sent from the manager to the workers
 #[derive(Clone, Debug, PartialEq)]
 pub enum DownMsg<Down: Send> {
     Stop,
@@ -18,7 +18,7 @@ pub enum DownMsg<Down: Send> {
     Other(Down)
 }
 
-/// A message sent from a worker to the organizer; contains the timestamp of its creation to
+/// A message sent from a worker to the manager; contains the timestamp of its creation to
 /// allow RecvBurstIterator to stop early
 #[derive(Clone, Debug)]
 pub struct UpMsg<Up: Send> {

@@ -17,6 +17,28 @@ pub use iterator::*;
 mod msg;
 pub use msg::*;
 
+// As per this test: https://github.com/rust-lang/rust/blob/1.3.0/src/libstd/sync/mpsc/mod.rs#L1581-L1592
+// it looks like std::sync::mpsc channels are meant to preserve the order sent within a single thread
+
+/**
+The main struct, represents a pool of worker.
+The owner of this struct is the "Manager", while the threads handled by this struct are the "Workers".
+
+**Example:**
+
+```
+use worker_pool::WorkerPool;
+
+let mut pool: WorkerPool<String, ()> = WorkerPool::new(100);
+
+pool.execute(|tx, _rx| {
+    tx.send(String::from("Hello"));
+    tx.send(String::from("world!"));
+});
+
+assert_eq!(pool.stop().collect::<Vec<_>>().join(" "), "Hello world!");
+```
+**/
 pub struct WorkerPool<Up, Down>
 where
     Up: Send + 'static,

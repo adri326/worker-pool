@@ -231,6 +231,57 @@ fn test_burst() {
     });
 }
 
+#[test]
+fn readme_deadlock() {
+    panic_after(Duration::new(1, 0), || {
+        // Here, `u64` is the type of the messages from the workers to the manager
+        // `()` is the type of the messages from the manager to the workers
+        // `32` is the maximum length of the message queue
+        let mut pool: WorkerPool<u64, ()> = WorkerPool::new(32);
+
+        // Start a new thread, that will communicate with the manager
+        pool.execute(|tx, rx| {
+            tx.send(2).unwrap();
+            let mut n = 3;
+            loop {
+                match rx.try_recv() {
+                    Ok(DownMsg::Stop) => break,
+                    _ => {}
+                }
+
+                while !is_prime(n) {
+                    n += 2;
+                }
+
+                tx.send(n).unwrap(); // The program may block here; this will not cause a deadlock
+            }
+        });
+
+        // Sleep a bit
+        std::thread::sleep(Duration::new(0, 100_000_000));
+
+        // The iterator returned by pool.recv_burst() only yields messages received before it was created
+        for x in pool.recv_burst() {
+            println!("{}", x);
+            std::thread::sleep(Duration::new(0, 10_000_000));
+        }
+
+        // pool.stop() also returns an iterator, which will send a Stop message and gather the worker's messages until they all finish
+        for x in pool.stop() {
+            println!("{}", x);
+        }
+
+        fn is_prime(n: u64) -> bool {
+            for i in 2..n {
+                if n % i == 0 {
+                    return false
+                }
+            }
+            true
+        }
+    });
+}
+
 fn panic_after<T, F>(d: Duration, f: F) -> T
 where
     T: Send + 'static,
