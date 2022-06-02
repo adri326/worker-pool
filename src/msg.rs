@@ -11,7 +11,7 @@ pub type TrySendError<T> = std::sync::mpsc::TrySendError<T>;
 
 /// A message sent from the organizer to the workers
 #[derive(Clone, Debug, PartialEq)]
-pub enum DownMsg<Down: Send = ()> {
+pub enum DownMsg<Down: Send> {
     Stop,
     Pause,
     Continue,
@@ -21,30 +21,17 @@ pub enum DownMsg<Down: Send = ()> {
 /// A message sent from a worker to the organizer; contains the timestamp of its creation to
 /// allow RecvBurstIterator to stop early
 #[derive(Clone, Debug)]
-pub struct UpMsg<Up: Send = ()> {
+pub struct UpMsg<Up: Send> {
     time: Instant,
     msg: Up
 }
 
-/// A wrapper around Sender<UpMsg<Up>>; this type implements !Send,
+/// A wrapper around Sender<UpMsg<Up>>. This type implements `!Send`,
 /// as RecvAllIterator depends on this type being dropped whenever the thread holding it stops
 #[derive(Clone, Debug)]
-pub struct WorkerSender<Up: Send = ()> {
+pub struct WorkerSender<Up: Send> {
     sender: SyncSender<UpMsg<Up>>,
 }
-
-impl<Up: Send> !Send for WorkerSender<Up> {}
-
-impl<Up: Send> From<SyncSender<UpMsg<Up>>> for WorkerSender<Up> {
-    fn from(sender: SyncSender<UpMsg<Up>>) -> Self {
-        Self {
-            sender
-        }
-    }
-}
-
-/// A wrapper around Receiver<DownMsg<Down>>
-pub type WorkerReceiver<Down> = Receiver<DownMsg<Down>>;
 
 impl<Up: Send> UpMsg<Up> {
     pub fn new(msg: Up) -> Self {
@@ -79,3 +66,16 @@ impl<Up: Send> WorkerSender<Up> {
         })
     }
 }
+
+impl<Up: Send> !Send for WorkerSender<Up> {}
+
+impl<Up: Send> From<SyncSender<UpMsg<Up>>> for WorkerSender<Up> {
+    fn from(sender: SyncSender<UpMsg<Up>>) -> Self {
+        Self {
+            sender
+        }
+    }
+}
+
+/// A wrapper around Receiver<DownMsg<Down>>
+pub type WorkerReceiver<Down> = Receiver<DownMsg<Down>>;

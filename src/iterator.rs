@@ -1,5 +1,6 @@
 use super::*;
 
+/// An iterator that will yield received messages until the message queue has been caught up to when the iterator was created.
 pub struct RecvBurstIterator<'a, Up: Send + 'static> {
     receiver: &'a Receiver<UpMsg<Up>>,
     buffer_prev: &'a mut Option<UpMsg<Up>>,
@@ -55,6 +56,7 @@ impl<'a, Up: Send + 'static> Iterator for RecvBurstIterator<'a, Up> {
     }
 }
 
+/// An iterator that will yield all the remaining messages from the workers, and join them once they have all dropped their receiver.
 pub struct RecvAllIterator<Up: Send + 'static> {
     receiver: Receiver<UpMsg<Up>>,
     buffer_prev: Option<UpMsg<Up>>,

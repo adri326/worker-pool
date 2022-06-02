@@ -17,16 +17,17 @@ pub use iterator::*;
 mod msg;
 pub use msg::*;
 
-pub struct WorkerPool<Up, Down = ()>
+pub struct WorkerPool<Up, Down>
 where
     Up: Send + 'static,
-    Down: Clone + Send + 'static,
+    Down: Send + 'static,
 {
     channel: (SyncSender<UpMsg<Up>>, Receiver<UpMsg<Up>>),
     buffer_length: usize,
     buffer_prev: Option<UpMsg<Up>>,
 
     workers: Vec<(JoinHandle<()>, Sender<DownMsg<Down>>)>,
+    worker_index: usize,
 
     phantoms: PhantomData<(Up, Down)>
 }
@@ -34,7 +35,7 @@ where
 impl<Up, Down> WorkerPool<Up, Down>
 where
     Up: Send + 'static,
-    Down: Clone + Send + 'static,
+    Down: Send + 'static,
 {
     #[inline]
     pub fn new(buffer_length: usize) -> Self {
@@ -43,6 +44,7 @@ where
             buffer_length,
             buffer_prev: None,
             workers: Vec::new(),
+            worker_index: 0,
             phantoms: PhantomData,
         }
     }
@@ -74,9 +76,16 @@ where
         }
     }
 
+    /// Returns the maximum length of the message queue
     #[inline]
     pub fn buffer_length(&self) -> usize {
         self.buffer_length
+    }
+
+    /// Receives a single message from a worker; blocking.
+    /// If you need to call this function repeatedly, then consider iterating over the result of `recv_burst` instead.
+    pub fn recv(&self) -> Result<Up, RecvError> {
+        self.channel.1.recv().map(|x| x.get())
     }
 
     /// Returns an iterator that will yield a "burst" of messages.
@@ -94,12 +103,16 @@ where
 
     /// Stops the execution of all threads, returning an iterator that will yield and join all of the
     /// messages from the workers. As soon as this function returns, the WorkerPool will be back to its starting state,
-    /// allowing you to execute more tasks immediately
+    /// allowing you to execute more tasks immediately.
+    ///
+    /// The returned iterator will read all of the remaining messages one by one.
+    /// Once the last message is received, it will join all threads.
     pub fn stop(&mut self) -> RecvAllIterator<Up> {
         let channel = std::mem::replace(&mut self.channel, sync_channel(self.buffer_length));
         let buffer_prev = std::mem::replace(&mut self.buffer_prev, None);
         let workers_len = self.workers.len();
         let workers = std::mem::replace(&mut self.workers, Vec::with_capacity(workers_len));
+        self.worker_index = 0;
 
         let workers = workers.into_iter().map(|worker| {
             // Note: the only instance where this can fail is if the receiver was dropped,
@@ -124,6 +137,7 @@ where
         let buffer_prev = std::mem::replace(&mut self.buffer_prev, None);
         let workers_len = self.workers.len();
         let workers = std::mem::replace(&mut self.workers, Vec::with_capacity(workers_len));
+        self.worker_index = 0;
 
         for worker in workers.iter() {
             // Note: the only instance where this can fail is if the receiver was dropped,
@@ -151,11 +165,30 @@ where
         res
     }
 
-    pub fn broadcast(&self, msg: DownMsg<Down>) {
+    /// Sends `msg` to every worker
+    pub fn broadcast(&self, msg: DownMsg<Down>) where Down: Clone {
         for (_join, tx) in self.workers.iter() {
             // This will fail iff the thread has dropped its receiver, in which case we
             // don't want for it to affect the other threads
             let _ = tx.send(msg.clone());
+        }
+    }
+
+    /// Sends `msg` to a single worker, in a round-robin fashion.
+    /// Returns Err if there is no worker or if the worker has dropped its receiver.
+    pub fn broadcast_one(&mut self, msg: DownMsg<Down>) -> Result<(), SendError<DownMsg<Down>>> {
+        if self.workers.len() == 0 {
+            return Err(std::sync::mpsc::SendError(msg))
+        }
+
+        self.worker_index = (self.worker_index + 1) % self.workers.len();
+        self.workers[self.worker_index].1.send(msg)
+    }
+
+    pub fn get(&self, index: usize) -> Option<(&JoinHandle<()>, Sender<DownMsg<Down>>)> {
+        match self.workers.get(index) {
+            Some(x) => Some((&x.0, x.1.clone())),
+            None => None
         }
     }
 }
