@@ -7,7 +7,8 @@ This crate implements a specialization of the actor model, with the following pr
 - workers may work indefinitely
 - workers can send messages up to the manager; these messages must not be lost
 - the manager can broadcast messages to the workers
-- the manager can ask the workers to stop their work at any time, in which case the system should reach a ready state as fast as possible
+- the manager can ask the workers to stop their work at any time, in which case the system should reach a normal state as fast as possible
+- the message queue can have a limit on its length
 - no deadlocks¹ and no livelocks
 
 ¹: unless specified in the documentation and under the assumption that every worker handles the `Stop` message and stops some time after
