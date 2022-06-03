@@ -9,7 +9,7 @@ pub struct RecvBurstIterator<'a, Up: Send + 'static> {
 
 impl<'a, Up: Send + 'static> RecvBurstIterator<'a, Up> {
     #[inline]
-    pub fn new(
+    pub(crate) fn new(
         receiver: &'a Receiver<UpMsg<Up>>,
         buffer_prev: &'a mut Option<UpMsg<Up>>,
         start: Instant
@@ -64,7 +64,7 @@ pub struct RecvAllIterator<Up: Send + 'static> {
 }
 
 impl<Up: Send + 'static> RecvAllIterator<Up> {
-    pub fn new(
+    pub(crate) fn new(
         receiver: Receiver<UpMsg<Up>>,
         buffer_prev: Option<UpMsg<Up>>,
         workers: Vec<JoinHandle<()>>,

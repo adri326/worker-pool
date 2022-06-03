@@ -1,3 +1,29 @@
+/*!
+This crate provides the [`WorkerPool`] struct, which lets you manage a set of threads that need to communicate with the parent thread.
+Throughout this documentation, the thread owning [`WorkerPool`] is called the "Manager",
+whereas the threads created and handled by the [`WorkerPool`] instance are called "Workers".
+
+Communication to and from the workers are done using [`std::sync::mpsc`] queues.
+When the manager communicates to the workers, the messages are said to go "down",
+and when the workers communicate to the manager, the messages are said to go "up".
+
+Communication from the workers to the manager uses a [`SyncSender`][std::sync::mpsc::SyncSender] wrapped inside of [`WorkerSender`], as to not overwhelm the manager thread and cause a memory overflow.
+[`WorkerSender::send`] can thus block and [`WorkerSender::try_send`] can return [`Err(TrySendError::Full)`][std::sync::mpsc::TrySendError::Full].
+
+Because of the guarantees of [`WorkerSender`], locking or waiting for the queue to become available will *not* cause a deadlock when trying to join the threads,
+as all the joining methods of [`WorkerPool`] ([`WorkerPool::stop`] and [`WorkerPool::stop_and_join`]) will first empty the message queue before
+calling `join()`.
+
+This guarantee of absence of deadlocks comes at the cost of restricting what a workers may or may not do:
+- if a worker is blocking or looping indefinitely, then it must be able to receive a [`Stop`][DownMsg::Stop] message at any time
+- once the `Stop` message is received, execution must stop shortly: a worker may only block on the message queue of their `WorkerSender`
+- downward message queues aren't bounded, as that might otherwise introduce a deadlock when trying to send the `Stop` message
+
+Additionally, the livelock problem of requests queuing up in the upward channel while the manager thread tries to catch up with them is solved by [`WorkerPool::recv_burst`]:
+- any message sent before `recv_burst` was called will be yielded by its returned iterator ([`RecvBurstIterator`]) if it reaches the manager thread in time (otherwise, it'll sit in the queue until the next call to `recv_burst`)
+- any message sent after `recv_burst` was called will cause that iterator to stop and put the message in a temporary buffer for the next call to `recv_burst`
+- [`RecvBurstIterator`] is non-blocking and holds a mutable reference to its `WorkerPool`
+*/
 #![feature(negative_impls)]
 
 use std::thread::{JoinHandle};
@@ -12,8 +38,8 @@ use std::sync::mpsc::{channel, sync_channel};
 #[cfg(test)]
 mod test;
 
-mod iterator;
-pub use iterator::*;
+pub mod iterator;
+use iterator::*;
 
 mod msg;
 pub use msg::*;
@@ -145,7 +171,7 @@ where
         let up_tx = self.channel.0.clone();
         self.workers.push((
             std::thread::spawn(move || {
-                (callback)(WorkerSender::from(up_tx), down_rx);
+                (callback)(WorkerSender::new(up_tx), down_rx);
             }),
             down_tx
         ));
@@ -186,7 +212,7 @@ where
         self.buffer_length
     }
 
-    /// Receives a single message from a worker; blocking.
+    /// Receives a single message from a worker; this is a blocking operation.
     /// If you need to call this function repeatedly, then consider iterating over the result of `recv_burst` instead.
     pub fn recv(&mut self) -> Result<Up, RecvError> {
         if self.buffer_prev.is_some() {
@@ -273,7 +299,8 @@ where
         res
     }
 
-    /// Sends `msg` to every worker
+    /// Sends `msg` to every worker.
+    /// If a worker has dropped their [`Receiver`][std::sync::mpsc::Receiver], then it will be skipped.
     pub fn broadcast(&self, msg: DownMsg<Down>) where Down: Clone {
         for (_join, tx) in self.workers.iter() {
             // This will fail iff the thread has dropped its receiver, in which case we
@@ -283,7 +310,7 @@ where
     }
 
     /// Sends `msg` to a single worker, in a round-robin fashion.
-    /// Returns Err if there is no worker or if the worker has dropped its receiver.
+    /// Returns `Err` if there is no worker or if the worker has dropped its receiver.
     pub fn broadcast_one(&mut self, msg: DownMsg<Down>) -> Result<(), SendError<DownMsg<Down>>> {
         if self.workers.len() == 0 {
             return Err(std::sync::mpsc::SendError(msg))
