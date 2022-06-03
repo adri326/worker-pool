@@ -1,6 +1,6 @@
 [package]
 name = "worker-pool"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = [ "Shad Amethyst <adrien.burgun@orange.fr>" ]
 description = "A rust crate to handle a set of worker threads, which need to communicate back their result to the main thread"
